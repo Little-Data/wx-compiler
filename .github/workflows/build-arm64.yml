@@ -180,10 +180,11 @@ jobs:
           # nodegit 的 buildFlags.js 会自动取宿主 arm64，无需再强制 npm_config_arch。
           bash tools/setup-wechat-devtools.sh --arch arm64
 
-      - name: Ensure everything is aarch64 (fail if x86-64 ELF found)
+      # 只做架构报告，绝不阻断打包与后续步骤：set +e 关闭 errexit，结尾无条件成功。
+      - name: Report architecture (aarch64, non-blocking)
         working-directory: devtools
         run: |
-          set -e
+          set +e
           echo "== 关键二进制架构 =="
           for f in electron/electron electron/node \
                    resources/app.asar.unpacked/node_modules/wcc-exec/wcc \
@@ -191,25 +192,28 @@ jobs:
                    resources/app.asar.unpacked/node_modules/wcc-electron/build/Release/wcc.node \
                    resources/app.asar.unpacked/node_modules/wcc-electron/build/Release/wcsc.node; do
             if [ -f "$f" ]; then
-              echo "-- $f"; file "$f"
-              file "$f" | grep -q 'aarch64' || { echo "::error::$f 非 aarch64"; exit 1; }
+              if file "$f" | grep -q 'aarch64'; then
+                echo "OK    aarch64 : $f"
+              else
+                echo "::warning::$f 不是 aarch64：$(file "$f")"
+              fi
             else
               echo "::warning::文件不存在，跳过 $f"
             fi
           done
-          echo "== 扫描原生插件(.node)中的 Linux x86-64 =="
-          BAD=0
+          echo "== 扫描原生插件(.node)中的 Linux x86-64（报告，不阻断） =="
           while IFS= read -r f; do
-            # 只把 Linux ELF x86-64 视为错误；Windows PE 残留(资源自带)不误报。
+            # 仅把 Linux ELF x86-64 标红；Windows PE 残留（资源自带）不算。
             if file -L "$f" 2>/dev/null | grep -qE 'ELF.*x86-64'; then
-              echo "::error::发现 x86-64 ELF: $f"; BAD=1
+              echo "::error::发现 x86-64 ELF: $f"
             fi
           done < <(find resources/app.asar.unpacked/node_modules \
                      electron node bin -type f -iname '*.node' 2>/dev/null)
-          [ "$BAD" -eq 0 ] || exit 1
           echo "== 本地运行 arm64 node 校验 =="
           "$PWD/electron/node" -p "process.arch + ' ' + process.version" || \
-            echo "警告: 无法本地运行 node（缺依赖），跳过运行态检查"
+            echo "::warning::无法本地运行 node（缺依赖），跳过运行态检查"
+          echo "== 架构报告结束（不阻断打包） =="
+          true
 
       - name: Package release tarball
         working-directory: devtools

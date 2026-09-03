@@ -183,9 +183,15 @@ jobs:
         working-directory: devtools
         run: |
           set -e
-          # 用宿主 node 读取版本（arm64 node 无法在 x86 上运行，解析 JSON 无需目标 node）
-          DEVTOOLS_VERSION=$(node -p \
-            "JSON.parse(require('fs').readFileSync('resources/app/package.json','utf8')).version")
+          # 版本与 build-tar.sh 的规则保持一致：
+          # 有 resources/app/package.json 读取之，否则回退到 conf/config.json 的 devtools.version。
+          export PATH="$PWD/cache/npm/node_global/bin:$PATH"
+          if [ -f resources/app/package.json ]; then
+            DEVTOOLS_VERSION=$(node -p \
+              "JSON.parse(require('fs').readFileSync('resources/app/package.json','utf8')).version")
+          else
+            DEVTOOLS_VERSION=$(node tools/parse-config.js --get-devtools-version)
+          fi
           echo "DEVTOOLS_VERSION=$DEVTOOLS_VERSION"
           bash tools/build-tar.sh "v${DEVTOOLS_VERSION}-continuous" arm64
           ls -lh tmp/build

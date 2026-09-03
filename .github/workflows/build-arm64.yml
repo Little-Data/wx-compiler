@@ -22,8 +22,8 @@ env:
 
 # 说明：
 # 阶段1 在原生 arm64 runner 上编译 wx-compiler，产出 aarch64 的 wcc/wcsc（及 .node 原生模块）。
-# 阶段2 用 wechat-web-devtools-linux 自身脚本（x86→arm64 交叉编译 + QEMU 运行 arm64 运行时）
-#       组装出 Electron 版微信开发者工具 arm64 包。
+# 阶段2 在原生 arm64 runner 上用 wechat-web-devtools-linux 自身脚本组装出
+#       Electron 版微信开发者工具 arm64 包（electron/node/原生模块全部本地 arm64 编译）。
 # 阶段3 仅 tag 触发时发布 Release。
 
 jobs:
@@ -110,7 +110,9 @@ jobs:
   # ─────────────────────────────────────────────
   build-devtools:
     needs: build-compiler
-    runs-on: ubuntu-22.04
+    # 原生 arm64 runner：electron / node / 原生插件全部在 arm64 上本地编译，
+    # 从根本上消除 x86 交叉编译产生的 x86-64 文件。
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     env:
       ACTION_MODE: 'true'
@@ -135,22 +137,18 @@ jobs:
         with:
           node-version: '22'
 
-      # QEMU：让 x86_64 主机能运行 arm64 的 node/electron（打包阶段读版本、架构校验用）
-      - name: Set up QEMU (run arm64 binaries)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Install cross toolchain & build deps
+      - name: Install build deps
         run: |
           sudo apt-get update
+          # 原生 arm64 编译原生模块需要的开发库（交叉时由 sysroot 提供，现在直接装宿主库）
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake make pkg-config \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             p7zip-full wget xz-utils file dpkg \
-            python3 python-is-python3
+            python3 python-is-python3 \
+            libssl-dev libssh2-1-dev libkrb5-dev zlib1g-dev \
+            libx11-dev libxkbfile-dev libxdamage-dev libpcre3-dev
           # rebuild-node-modules.sh 强制 `hash python2` 检测；node-gyp@11 实际使用 python3。
-          # 提供 python2 符号链接即可通过检查（jammy 无独立 python2 包）。
+          # 提供 python2 符号链接即可通过检查。
           sudo ln -sf "$(command -v python3)" /usr/local/bin/python2
 
       - name: Download compiler artifact
@@ -174,24 +172,44 @@ jobs:
           chmod +x "$CACHE_DIR/wcc-arm64" "$CACHE_DIR/wcsc-arm64"
           ls -lh "$CACHE_DIR"
 
-      - name: Build devtools (download electron/node/devtools, cross rebuild native modules)
+      - name: Build devtools (native arm64)
         working-directory: devtools
         run: |
           export PATH="$PWD/cache/npm/node_global/bin:$PATH"
+          # 原生 arm64：所有 node-gyp / electron / 原生模块均在 arm64 上本地编译，
+          # nodegit 的 buildFlags.js 会自动取宿主 arm64，无需再强制 npm_config_arch。
           bash tools/setup-wechat-devtools.sh --arch arm64
 
-      # 尽力校验：交叉编译产物为 arm64。QEMU 仅在缺少目标架构动态加载器时能跑；
-      # 不允许该校验阻塞打包，故全部随失败继续（用户要求：校验失败也要出包）。
-      - name: Verify architecture (best-effort, non-blocking)
+      - name: Ensure everything is aarch64 (fail if x86-64 ELF found)
         working-directory: devtools
         run: |
-          echo "== 注入的 wx-compiler 产物架构 =="
-          file cache/compiler/v*/wcc-arm64 || true
-          echo "== 打包的运行时架构 =="
-          file electron/node electron/electron || true
-          echo "== 尝试在 QEMU 下运行 arm64 node（可选，失败不阻塞） =="
+          set -e
+          echo "== 关键二进制架构 =="
+          for f in electron/electron electron/node \
+                   resources/app.asar.unpacked/node_modules/wcc-exec/wcc \
+                   resources/app.asar.unpacked/node_modules/wcc-exec/wcsc \
+                   resources/app.asar.unpacked/node_modules/wcc-electron/build/Release/wcc.node \
+                   resources/app.asar.unpacked/node_modules/wcc-electron/build/Release/wcsc.node; do
+            if [ -f "$f" ]; then
+              echo "-- $f"; file "$f"
+              file "$f" | grep -q 'aarch64' || { echo "::error::$f 非 aarch64"; exit 1; }
+            else
+              echo "::warning::文件不存在，跳过 $f"
+            fi
+          done
+          echo "== 扫描原生插件(.node)中的 Linux x86-64 =="
+          BAD=0
+          while IFS= read -r f; do
+            # 只把 Linux ELF x86-64 视为错误；Windows PE 残留(资源自带)不误报。
+            if file -L "$f" 2>/dev/null | grep -qE 'ELF.*x86-64'; then
+              echo "::error::发现 x86-64 ELF: $f"; BAD=1
+            fi
+          done < <(find resources/app.asar.unpacked/node_modules \
+                     electron node bin -type f -iname '*.node' 2>/dev/null)
+          [ "$BAD" -eq 0 ] || exit 1
+          echo "== 本地运行 arm64 node 校验 =="
           "$PWD/electron/node" -p "process.arch + ' ' + process.version" || \
-            echo "警告: x86 宿主缺少 arm64 动态加载器(/lib/ld-linux-aarch64.so.1)，跳过运行态校验"
+            echo "警告: 无法本地运行 node（缺依赖），跳过运行态检查"
 
       - name: Package release tarball
         working-directory: devtools

@@ -14,6 +14,10 @@ on:
         description: 'wechat-web-devtools-linux ref (has arm64 config)'
         required: false
         default: 'electron'
+      skyline:
+        description: '构建 Skyline 的 arm64 插件（选择 true 启用，可选特性）'
+        required: false
+        default: 'true'
 
 env:
   COMPILER_REF: ${{ github.event.inputs.compiler_ref || 'master' }}
@@ -117,6 +121,8 @@ jobs:
     env:
       ACTION_MODE: 'true'
       WINE: 'false'
+      # 0 = 跳过实验性的 skyline arm64 原生插件构建
+      SKYLINE_ARCH_BUILD: '1'
       # 对应 build-with-docker.sh 里的环境，保证 node-gyp / asar 写入仓库内 cache
       npm_config_prefix: ${{ github.workspace }}/devtools/cache/npm/node_global
       npm_config_cache: ${{ github.workspace }}/devtools/cache/npm/node_cache
@@ -180,6 +186,16 @@ jobs:
           # nodegit 的 buildFlags.js 会自动取宿主 arm64，无需再强制 npm_config_arch。
           bash tools/setup-wechat-devtools.sh --arch arm64
 
+      # 可选：从源码构建 Skyline 的 arm64 插件（上游只有 linux-x86_64 二进制）。
+      # best-effort：失败仅打 ::warning，不阻断打包（Skyline 为可选特性）。
+      - name: Build Skyline native addons (arm64, best-effort)
+        if: ${{ inputs.skyline == 'true' }}
+        working-directory: devtools
+        run: |
+          export PATH="$PWD/cache/npm/node_global/bin:$PATH"
+          bash tools/cross/build-skyline-arm64.sh || \
+            echo "::warning::Skyline arm64 插件构建失败（不影响主构建）"
+
       # 只做架构报告，绝不阻断打包与后续步骤：set +e 关闭 errexit，结尾无条件成功。
       - name: Report architecture (aarch64, non-blocking)
         working-directory: devtools
@@ -213,6 +229,51 @@ jobs:
           "$PWD/electron/node" -p "process.arch + ' ' + process.version" || \
             echo "::warning::无法本地运行 node（缺依赖），跳过运行态检查"
           echo "== 架构报告结束（不阻断打包） =="
+          true
+
+      # ── Skyline 原生插件 arm64 构建（实验性，best-effort，失败不阻断主包）──
+      # 上游 msojocs/skyline-shared-memory 与 skyline-client-server 只发布 linux-x86_64；
+      # 这里在 arm64 上从源码构建 sharedMemory.node 与 skyline.node（vcpkg + Boost + spdlog + nlohmann-json，
+      # 构建较慢）。设 SKYLINE_ARCH_BUILD=0 可跳过。
+      - name: Skyline native addons (arm64, best-effort)
+        if: ${{ env.SKYLINE_ARCH_BUILD == '1' }}
+        working-directory: devtools
+        run: |
+          set +e
+          DEVTOOLS="$PWD"
+          UP="$DEVTOOLS/resources/app.asar.unpacked/node_modules"
+          export VCPKG_ROOT="$DEVTOOLS/cache/vcpkg"
+          export VCPKG_TARGET_TRIPLET="arm64-linux"
+          export VCPKG_HOST_TRIPLET="arm64-linux"
+          mkdir -p tmp
+          # 1) vcpkg（arm64 host，默认构建 arm64-linux 库）
+          if [ ! -d "$VCPKG_ROOT" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT" || echo "::warning::vcpkg clone 失败"
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics || echo "::warning::vcpkg bootstrap 失败"
+          corepack enable
+          # 2) skyline-shared-memory -> sharedMemory.node
+          ( cd tmp
+            git clone --depth 1 --branch v1.0.4 https://github.com/msojocs/skyline-shared-memory.git ssm || true
+            cd ssm && pnpm install --ignore-scripts || true
+            pnpm exec cmake-js compile || echo "::warning::ssm cmake-js 失败"
+            f=$(find . -name 'sharedMemory.node' | head -1)
+            [ -n "$f" ] && cp -f "$f" "$UP/sharedMemory/sharedMemory.node" && \
+              echo "injected sharedMemory.node: $f"
+          ) || true
+          # 3) skyline-client-server/packages/native -> skyline.node
+          ( cd tmp
+            git clone --depth 1 --branch v2.01.2510280-1 https://github.com/msojocs/skyline-client-server.git scs || true
+            cd scs && pnpm install --ignore-scripts || true
+            ( cd packages/native && pnpm install --ignore-scripts || true
+              pnpm exec cmake-js compile || echo "::warning::scs cmake-js 失败" )
+            f=$(find . -name 'skyline.node' | head -1)
+            [ -n "$f" ] && cp -f "$f" "$UP/skyline-addon/build/skyline.node" && \
+              echo "injected skyline.node: $f"
+          ) || true
+          echo "== skyline 结果（应显示 aarch64） =="
+          file "$UP/sharedMemory/sharedMemory.node" "$UP/skyline-addon/build/skyline.node" 2>/dev/null || true
+          echo "== skyline 构建结束（实验性，失败不影响主包） =="
           true
 
       - name: Package release tarball

@@ -10,19 +10,19 @@ on:
       compiler_ref:
         description: 'wx-compiler ref (branch/tag/sha)'
         required: false
-        default: 'main'
+        default: 'master'
       devtools_ref:
         description: 'wechat-web-devtools-linux ref'
         required: false
-        default: 'main'
+        default: 'electron'
       nwjs_version:
         description: 'NW.js SDK version (must match devtools expectation)'
         required: false
         default: '0.87.0'
 
 env:
-  COMPILER_REF: ${{ github.event.inputs.compiler_ref || 'main' }}
-  DEVTOOLS_REF: ${{ github.event.inputs.devtools_ref || 'main' }}
+  COMPILER_REF: ${{ github.event.inputs.compiler_ref || 'master' }}
+  DEVTOOLS_REF: ${{ github.event.inputs.devtools_ref || 'electron' }}
   NWJS_VERSION: ${{ github.event.inputs.nwjs_version || '0.87.0' }}
   BUILD_TYPE: Release
 

@@ -113,10 +113,13 @@ jobs:
           path: devtools
           submodules: recursive
 
+      # 必须 >= Node 20.11：nodegit 的 acquireOpenSSL.mjs 使用 import.meta.dirname，
+      # Node<20.11 会将其求值为 undefined，导致 path.join(undefined,...) 崩溃。
+      # 目标原生模块 ABI 由 node-gyp 的 --target 决定，与宿主 node 版本无关。
       - name: Set up Node.js (build host tooling)
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22'
 
       # QEMU：让 x86_64 主机能运行 arm64 的 node/electron（打包阶段读版本、架构校验用）
       - name: Set up QEMU (run arm64 binaries)

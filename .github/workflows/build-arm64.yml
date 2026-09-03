@@ -166,23 +166,26 @@ jobs:
           export PATH="$PWD/cache/npm/node_global/bin:$PATH"
           bash tools/setup-wechat-devtools.sh --arch arm64
 
-      - name: Verify architecture (run arm64 node via QEMU)
+      # 尽力校验：交叉编译产物为 arm64。QEMU 仅在缺少目标架构动态加载器时能跑；
+      # 不允许该校验阻塞打包，故全部随失败继续（用户要求：校验失败也要出包）。
+      - name: Verify architecture (best-effort, non-blocking)
         working-directory: devtools
         run: |
-          set -e
-          # 注入的编译器应为 aarch64
-          file cache/compiler/v*/wcc-arm64 | grep -q 'aarch64'
-          # 打包的运行时 node 也为 aarch64 且可执行
-          "$PWD/electron/node" -p "process.arch + ' ' + process.version"
-          "$PWD/electron/node" -p "process.arch" | grep -q 'arm64'
+          echo "== 注入的 wx-compiler 产物架构 =="
+          file cache/compiler/v*/wcc-arm64 || true
+          echo "== 打包的运行时架构 =="
+          file electron/node electron/electron || true
+          echo "== 尝试在 QEMU 下运行 arm64 node（可选，失败不阻塞） =="
+          "$PWD/electron/node" -p "process.arch + ' ' + process.version" || \
+            echo "警告: x86 宿主缺少 arm64 动态加载器(/lib/ld-linux-aarch64.so.1)，跳过运行态校验"
 
       - name: Package release tarball
         working-directory: devtools
         run: |
           set -e
-          DEVTOOLS_VERSION=$("$PWD/electron/node" -p \
-            "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version" \
-            "$PWD/resources/app/package.json")
+          # 用宿主 node 读取版本（arm64 node 无法在 x86 上运行，解析 JSON 无需目标 node）
+          DEVTOOLS_VERSION=$(node -p \
+            "JSON.parse(require('fs').readFileSync('resources/app/package.json','utf8')).version")
           echo "DEVTOOLS_VERSION=$DEVTOOLS_VERSION"
           bash tools/build-tar.sh "v${DEVTOOLS_VERSION}-continuous" arm64
           ls -lh tmp/build

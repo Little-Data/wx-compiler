@@ -55,6 +55,19 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
+      - name: Install cmake-js / node-addon-api
+        working-directory: src/module
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm add -D cmake-js
+            pnpm add node-addon-api
+          fi
+          # 校验探测链路
+          pnpm exec cmake-js print-cmakejs-src --arch arm64
+          node -p "require('node-addon-api').include"
+
       - name: Install node-gyp globally
         run: npm install -g node-gyp
 

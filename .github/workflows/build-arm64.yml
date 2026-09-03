@@ -52,6 +52,9 @@ jobs:
         with:
           node-version: '18'   # 需与 NW.js 内置 Node ABI 一致，见 docs/Version.MD
 
+      - name: Install pnpm
+        run: npm install -g pnpm
+
       - name: Install node-gyp globally
         run: npm install -g node-gyp
 

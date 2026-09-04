@@ -43,7 +43,7 @@ jobs:
       - name: Checkout wx-compiler
         uses: actions/checkout@v4
         with:
-          repository: little-Data/wx-compiler
+          repository: little-Data/wx-compiler-arm64
           ref: ${{ env.COMPILER_REF }}
           path: wx-compiler
           submodules: recursive
@@ -128,7 +128,7 @@ jobs:
       - name: Checkout wechat-web-devtools-linux
         uses: actions/checkout@v4
         with:
-          repository: little-Data/wechat-web-devtools-linux
+          repository: little-Data/wechat-web-devtools-linux-arm64
           ref: ${{ env.DEVTOOLS_REF }}
           path: devtools
           submodules: recursive
